@@ -1,38 +1,39 @@
 import torch.nn as nn
 import torch
 
-# 生成器
+
 class Generator(nn.Module):
-    def __init__(self, latent_dim, stroke_feature_dim):
+    def __init__(self, latent_dim, stroke_feature_dim, unicode_feature_dim):
         super(Generator, self).__init__()
         self.fc = nn.Sequential(
-            nn.Linear(latent_dim + stroke_feature_dim, 128 * 7 * 7),
+            nn.Linear(latent_dim + stroke_feature_dim + unicode_feature_dim, 128 * 7 * 7),
             nn.ReLU()
         )
         self.conv = nn.Sequential(
             nn.ConvTranspose2d(128, 64, kernel_size=4, stride=2, padding=1),  # 7x7 -> 14x14
             nn.BatchNorm2d(64),
             nn.ReLU(),
-            nn.ConvTranspose2d(64, 1, kernel_size=4, stride=2, padding=1),   # 14x14 -> 28x28
+            nn.ConvTranspose2d(64, 1, kernel_size=4, stride=2, padding=1),  # 14x14 -> 28x28
             nn.Tanh()
         )
 
-    def forward(self, z, stroke_features):
-        input_data = torch.cat((z, stroke_features), dim=1)
+    def forward(self, z, stroke_features, unicode_features):
+        if unicode_features.dim() == 1:
+            unicode_features = unicode_features.unsqueeze(0)  # 將 1 維張量擴展為 2 維
+        input_data = torch.cat((z, stroke_features, unicode_features), dim=1)
         out = self.fc(input_data)
         out = out.view(out.size(0), 128, 7, 7)
         img = self.conv(out)
         return img
 
 
-# 判別器
 class Discriminator(nn.Module):
     def __init__(self):
         super(Discriminator, self).__init__()
         self.conv = nn.Sequential(
-            nn.Conv2d(1, 64, kernel_size=4, stride=2, padding=1),  # 28x28 -> 14x14
+            nn.Conv2d(1, 64, kernel_size=4, stride=2, padding=1),
             nn.LeakyReLU(0.2),
-            nn.Conv2d(64, 128, kernel_size=4, stride=2, padding=1),  # 14x14 -> 7x7
+            nn.Conv2d(64, 128, kernel_size=4, stride=2, padding=1),
             nn.BatchNorm2d(128),
             nn.LeakyReLU(0.2)
         )

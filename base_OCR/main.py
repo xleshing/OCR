@@ -3,97 +3,134 @@ import torch.nn as nn
 import torch.optim as optim
 from dataloader import create_dataloader
 from model import Generator, Discriminator
-from preprocess_image import StrokeFeatureExtractor
+from feature_extraction import StrokeFeatureExtractor
 import matplotlib.pyplot as plt
+from preprocess_image import generate_unicode_image
+import os
 
-# 設備配置
+# 設置設備
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # 超參數
 latent_dim = 100
-stroke_feature_dim = 32
+stroke_feature_dim = 64
+unicode_feature_dim = 64
 lr = 0.0002
-batch_size = 32
-epochs = 100000
+batch_size = 2**25
+save_interval = 1000  # 每隔多少 epoch 保存模型
 
 # 初始化模型
-generator = Generator(latent_dim, stroke_feature_dim).to(device)
-discriminator = Discriminator().to(device)
 feature_extractor = StrokeFeatureExtractor().to(device)
+generator = Generator(latent_dim, stroke_feature_dim, unicode_feature_dim).to(device)
+discriminator = Discriminator().to(device)
 adversarial_loss = nn.BCELoss()
 
 optimizer_G = optim.Adam(generator.parameters(), lr=lr)
 optimizer_D = optim.Adam(discriminator.parameters(), lr=lr)
 
-# 數據準備
-image_paths = [
-    "./data/raw_data/img.png",
-    "./data/raw_data/img_1.png",
-    "./data/raw_data/img_2.png",
-    "./data/raw_data/img_3.png",
-    "./data/raw_data/img_4.png",
-    "./data/raw_data/img_5.png",
-    "./data/raw_data/img_6.png",
-    "./data/raw_data/img_7.png",
-    "./data/raw_data/img_8.png",
-    "./data/raw_data/img_9.png",
-    "./data/raw_data/img_10.png",
-    "./data/raw_data/img_11.png",
-    "./data/raw_data/img_12.png",
-    "./data/raw_data/img_13.png",
-    "./data/raw_data/img_14.png",
-    "./data/raw_data/img_15.png",
-    "./data/raw_data/img_16.png",
-    "./data/raw_data/img_17.png",
-    "./data/raw_data/img_18.png",
-    "./data/raw_data/img_19.png",
-    "./data/raw_data/img_20.png",
-    "./data/raw_data/img_21.png",
-    "./data/raw_data/img_22.png",
-    "./data/raw_data/img_23.png",
-    "./data/raw_data/img_24.png"
-]
-dataloader = create_dataloader(image_paths, batch_size, feature_extractor)
+# 如果有保存的模型，繼續訓練
+start_epoch = 0
+if os.path.exists("generator_checkpoint.pth") and os.path.exists("discriminator_checkpoint.pth"):
+    print("加載保存的模型...")
+    generator.load_state_dict(torch.load("generator_checkpoint.pth"))
+    discriminator.load_state_dict(torch.load("discriminator_checkpoint.pth"))
+    optimizer_G.load_state_dict(torch.load("optimizer_G_checkpoint.pth"))
+    optimizer_D.load_state_dict(torch.load("optimizer_D_checkpoint.pth"))
+    start_epoch = torch.load("epoch_checkpoint.pth")
+    print(f"從第 {start_epoch} 個 epoch 繼續訓練")
 
-# 標籤準備
-valid_label = torch.ones(batch_size, 1, device=device)
-fake_label = torch.zeros(batch_size, 1, device=device)
+# 加載數據
+real_image_dir = "data/real_handwriting/add/"
+dataloader = create_dataloader(real_image_dir, batch_size, feature_extractor)
 
-# 輔助函數：生成圖像並可視化
-def visualize_generated_images(generator, epoch, latent_dim, stroke_features):
+
+def train(epochs, show_num):
+    # 訓練
+    for epoch in range(start_epoch, epochs):
+        for real_imgs, unicode_imgs, stroke_features, unicode_features in dataloader:
+            real_imgs, unicode_imgs = real_imgs.to(device), unicode_imgs.to(device)
+            stroke_features, unicode_features = stroke_features.to(device), unicode_features.to(device)
+
+            # 訓練生成器
+            optimizer_G.zero_grad()
+            z = torch.randn(real_imgs.size(0), latent_dim, device=device)
+            gen_imgs = generator(z, stroke_features, unicode_features)
+            g_loss = adversarial_loss(discriminator(gen_imgs), torch.ones_like(discriminator(gen_imgs)))
+            g_loss.backward()
+            optimizer_G.step()
+
+            # 訓練判別器
+            optimizer_D.zero_grad()
+            real_loss = adversarial_loss(discriminator(real_imgs), torch.ones_like(discriminator(real_imgs)))
+            fake_loss = adversarial_loss(discriminator(gen_imgs.detach()), torch.zeros_like(discriminator(gen_imgs)))
+            d_loss = (real_loss + fake_loss) / 2
+            d_loss.backward()
+            optimizer_D.step()
+
+        if epoch % save_interval == 0:
+            print(f"[Epoch {epoch}/{epochs}] Save")
+            torch.save(generator.state_dict(), "generator_checkpoint.pth")
+            torch.save(discriminator.state_dict(), "discriminator_checkpoint.pth")
+            torch.save(optimizer_G.state_dict(), "optimizer_G_checkpoint.pth")
+            torch.save(optimizer_D.state_dict(), "optimizer_D_checkpoint.pth")
+            torch.save(epoch, "epoch_checkpoint.pth")
+
+        # 每 100 個 epoch 保存模型
+        if epoch % show_num == 0:
+            print(f"[Epoch {epoch}/{epochs}] [D loss: {d_loss.item()}] [G loss: {g_loss.item()}]")
+            # 可視化生成結果
+            plt.imshow(gen_imgs[0].squeeze(0).detach().cpu().numpy(), cmap='gray')
+            plt.title(f"Epoch {epoch}")
+            plt.show()
+
+    # 訓練結束後保存最終模型
+    torch.save(generator.state_dict(), "generator.pth")
+    torch.save(discriminator.state_dict(), "discriminator.pth")
+
+
+# 自由生成
+def generate_random_character(generator, feature_extractor):
+    generator.load_state_dict(torch.load("generator.pth", map_location=device))
     generator.eval()
-    z = torch.randn(1, latent_dim).to(device)
+    random_unicode = chr(torch.randint(0x4E00, 0x9FFF, (1,)).item())
+    print(f"自由生成的字是: {random_unicode}")
+
+    unicode_image = generate_unicode_image(random_unicode).to(device)
+    unicode_features = feature_extractor(unicode_image.unsqueeze(0)).squeeze(0)
+
+    # 確保 unicode_features 維度正確
+    if unicode_features.dim() == 1:
+        unicode_features = unicode_features.unsqueeze(0)
+
+    z = torch.randn(1, latent_dim, device=device)
+    stroke_features = torch.zeros(1, stroke_feature_dim, device=device)  # 默認手寫特徵為零
+
     with torch.no_grad():
-        gen_img = generator(z, stroke_features).view(28, 28).cpu().numpy()
-    plt.imshow(gen_img, cmap='gray')
-    plt.title(f"Epoch {epoch}: Generated Image")
-    plt.show()
+        gen_img = generator(z, stroke_features, unicode_features)
+        plt.imshow(gen_img.squeeze(0).squeeze(0).detach().cpu().numpy(), cmap='gray')
+        plt.title(f"Generated Character: {random_unicode}")
+        plt.show()
 
-# 訓練過程
-for epoch in range(epochs):
-    for real_imgs, stroke_features in dataloader:
-        real_imgs, stroke_features = real_imgs.to(device), stroke_features.to(device)
 
-        # 訓練生成器
-        optimizer_G.zero_grad()
-        z = torch.randn(real_imgs.size(0), latent_dim, device=device)
-        gen_imgs = generator(z, stroke_features)
-        g_loss = adversarial_loss(discriminator(gen_imgs), valid_label[:real_imgs.size(0)])
-        g_loss.backward()
-        optimizer_G.step()
+# 指定生成
+def generate_specific_character(generator, feature_extractor, character):
+    generator.load_state_dict(torch.load("generator.pth", map_location=device))
+    generator.eval()
+    print(f"指定生成的字是: {character}")
 
-        # 訓練判別器
-        optimizer_D.zero_grad()
-        real_loss = adversarial_loss(discriminator(real_imgs), valid_label[:real_imgs.size(0)])
-        fake_loss = adversarial_loss(discriminator(gen_imgs.detach()), fake_label[:real_imgs.size(0)])
-        d_loss = (real_loss + fake_loss) / 2
-        d_loss.backward()
-        optimizer_D.step()
+    unicode_image = generate_unicode_image(character).to(device)
+    unicode_features = feature_extractor(unicode_image.unsqueeze(0)).squeeze(0)
+    z = torch.randn(1, latent_dim, device=device)
+    stroke_features = torch.zeros(1, stroke_feature_dim, device=device)  # 默認手寫特徵為零
 
-    if epoch % 10000 == 0:
-        print(f"[Epoch {epoch}/{epochs}] [D loss: {d_loss.item():.4f}] [G loss: {g_loss.item():.4f}]")
-        visualize_generated_images(generator, epoch, latent_dim, stroke_features[0:1])
+    with torch.no_grad():
+        gen_img = generator(z, stroke_features, unicode_features)
+        plt.imshow(gen_img.squeeze(0).squeeze(0).detach().cpu().numpy(), cmap='gray')
+        plt.title(f"Generated Character: {character}")
+        plt.show()
 
-# 儲存模型
-torch.save(generator.state_dict(), "generator_cnn.pth")
-torch.save(discriminator.state_dict(), "discriminator_cnn.pth")
+
+# 測試
+train(100000, 10000)
+generate_random_character(generator, feature_extractor)
+generate_specific_character(generator, feature_extractor, "一")

@@ -1,12 +1,9 @@
-import torch.nn as nn
+from PIL import Image, ImageDraw, ImageFont
 import torchvision.transforms as transforms
-from PIL import Image
 
 
+# 預處理手寫圖片
 def preprocess_image(image_path):
-    """
-    圖像預處理：灰階化、調整大小並標準化
-    """
     transform = transforms.Compose([
         transforms.Grayscale(),
         transforms.Resize((28, 28)),
@@ -17,24 +14,22 @@ def preprocess_image(image_path):
     return transform(image)
 
 
-class StrokeFeatureExtractor(nn.Module):
-    def __init__(self):
-        super(StrokeFeatureExtractor, self).__init__()
-        self.conv = nn.Sequential(
-            nn.Conv2d(1, 16, kernel_size=3, stride=1, padding=1),
-            nn.ReLU(),
-            nn.MaxPool2d(kernel_size=2, stride=2),  # 28x28 -> 14x14
-            nn.Conv2d(16, 32, kernel_size=3, stride=1, padding=1),
-            nn.ReLU(),
-            nn.MaxPool2d(kernel_size=2, stride=2)   # 14x14 -> 7x7
-        )
-        self.fc = nn.Sequential(
-            nn.Flatten(),
-            nn.Linear(32 * 7 * 7, 32),  # 壓縮到 32 維
-            nn.ReLU()
-        )
+def generate_unicode_image(character, size=(28, 28)):
+    font_path = "./data/kaiu.ttf"  # 替換為繁體字體的路徑
+    font = ImageFont.truetype(font_path, size=20)
+    image = Image.new("L", size, "white")
+    draw = ImageDraw.Draw(image)
 
-    def forward(self, img):
-        out = self.conv(img)
-        features = self.fc(out)
-        return features
+    # 使用 textbbox 計算文本的邊界
+    text_bbox = draw.textbbox((0, 0), character, font=font)  # 返回 (left, top, right, bottom)
+    w, h = text_bbox[2] - text_bbox[0], text_bbox[3] - text_bbox[1]
+
+    # 將文本繪製到圖像中
+    draw.text(((size[0] - w) / 2, (size[1] - h) / 2), character, font=font, fill="black")
+
+    # 圖像轉換為張量
+    transform = transforms.Compose([
+        transforms.ToTensor(),
+        transforms.Normalize([0.5], [0.5])
+    ])
+    return transform(image)
